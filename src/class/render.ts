@@ -16,19 +16,31 @@ export interface RenderOptions {
     frames?: number,
     delay?: number,
     repeat?: boolean
+  },
+  renderOptions?: {
+    port?: number,
+    background?: {
+      transparent?: boolean;
+      color?: number;
+    }
   }
 }
 
 export class Render {
   private readonly verbose: boolean = process.env.DEV === "true";
+  private readonly screenshotHeight = 1000;
+  private readonly screenshotWidth = this.screenshotHeight;
+  private readonly outputDir: string = path.join(__dirname, "../../output/");
+
   private doGIF: boolean = false;
   private GIFframes: number = 60;
   private GIFDelay: number = 5;
   private GIFRepeat: boolean = true;
-  private readonly screenshotHeight = 1000;
-  private readonly screenshotWidth = this.screenshotHeight;
 
-  private readonly outputDir: string = path.join(__dirname, "../../output/");
+  private background: number = 0x000000;
+  private isTransparent: boolean = false;
+
+  private port: number = 40;
 
   constructor() {
     this.checkDir(this.outputDir);
@@ -43,11 +55,16 @@ export class Render {
         if (options.gifOptions.delay) this.GIFDelay = options.gifOptions.delay;
         if (options.gifOptions.repeat) this.GIFRepeat = options.gifOptions.repeat;
       }
-    }
 
-    else {
-      this.doGIF = false;
-    }
+      if (options.renderOptions) {
+        if (options.renderOptions.port) this.port = options.renderOptions.port;
+        if (options.renderOptions.background) {
+          if (options.renderOptions.background.color !== undefined) this.background = options.renderOptions.background.color;
+          if (options.renderOptions.background.transparent !== undefined) this.isTransparent = options.renderOptions.background.transparent;
+        }
+      }
+
+    } else this.doGIF = false;
 
     this.run();
   }
@@ -60,20 +77,22 @@ export class Render {
   }
 
   private async run() {
-    const port: number = 40;
-
     /* Launch server */
     const server = http.createServer((req: http.IncomingMessage, res: http.ServerResponse) => handler(req, res));
-    server.listen(port, async () => {
+    server.listen(this.port, async () => {
       
       /* Launch pupeteer with WebGL support in Linux */
-      const browser = new Browser({ port: port, verbose: true });
+      const browser = new Browser({ port: this.port, verbose: true, headless: true });
       await browser.launch();
-      await browser.loadPage(`/src/html/cube?animated=${this.doGIF}`);
-      await browser.evaluatePage();
+      await browser.loadPage(`/src/page`);
+      await browser.evaluatePage({ 
+        animated: this.doGIF, 
+        background: this.background, 
+        transparent: this.isTransparent 
+      });
 
       if (this.doGIF) await this.renderAsGIF(browser);
-      else if (!this.doGIF) await this.renderAsPNG(browser);
+      else await this.renderAsPNG(browser);
 
       browser.stop();
       server.close();
@@ -87,6 +106,7 @@ export class Render {
     const encoder = new GIFEncoder(this.screenshotWidth, this.screenshotHeight);
     encoder.start();
     encoder.setRepeat(this.GIFRepeat === true ? 0 : -1);
+    encoder.setTransparent(0);
     encoder.setDelay(this.GIFDelay);
 
     const canvas = Canvas.createCanvas(this.screenshotWidth, this.screenshotHeight);
@@ -105,7 +125,9 @@ export class Render {
         canvas.width, canvas.height	// dWidth, dHeight
       );
 
-      encoder.addFrame(context as CanvasRenderingContext2D);
+      // remove white pixel when transparent is enabled
+      if (this.isTransparent) encoder.addFrame(this.readdTransparency(context) as CanvasRenderingContext2D);
+      else encoder.addFrame(context as CanvasRenderingContext2D);
     }
 
     encoder.finish();
@@ -116,8 +138,38 @@ export class Render {
 
   private async renderAsPNG(browser: Browser) {
     const outputPath: string = path.join(this.outputDir, "file.png");
-    await browser.takeScreenshot(outputPath);
+
+    if (!this.isTransparent) await browser.takeScreenshot(outputPath);
+    else {
+      const canvas = Canvas.createCanvas(this.screenshotWidth, this.screenshotHeight);
+      let context = canvas.getContext('2d');
+      const screenshot = await Canvas.loadImage(await browser.takeScreenshot());
+      
+      context.drawImage(
+        screenshot,				    			// image
+        0, canvas.height,           // sx, sy
+        canvas.width, canvas.width,	// sWidth, sHeight
+        0, 0,												// dx, dy
+        canvas.width, canvas.height	// dWidth, dHeight
+      );
+
+      context = this.readdTransparency(context);
+      fs.writeFileSync(outputPath, canvas.toBuffer('image/png'));
+    }
 
     if (this.verbose) console.log(`${success}PNG file generated: ${outputPath}`);
+  }
+
+  private readdTransparency(context: Canvas.CanvasRenderingContext2D): Canvas.CanvasRenderingContext2D {
+    let screenData: Canvas.ImageData = context.getImageData(0, 0, this.screenshotWidth, this.screenshotHeight);
+    let pix: Uint8ClampedArray = screenData.data;
+    
+    for (let i:number = 0, n = pix.length; i < n; i+=4) {
+      let r: number = pix[i]; let g: number = pix[i+1]; let b: number = pix[i+2];
+      if (r === 255 && g === 255 && b === 255) pix[i+3] = 0;
+    }
+
+    context.putImageData(screenData, 0, 0);
+    return context;
   }
 }

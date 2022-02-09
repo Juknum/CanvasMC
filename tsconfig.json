@@ -15,10 +15,6 @@
     "allowJs": true,
     "resolveJsonModule": true,
     "baseUrl": "src",
-    "paths": {
-      "@/*": [ "../*" ],
-      "@class": ["*/class"]
-    },
     "plugins": [
       {
         "transform": "@zerollup/ts-transform-paths"

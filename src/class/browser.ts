@@ -1,12 +1,7 @@
 import puppeteer, { Browser as PBrowser, ConsoleMessage, HTTPResponse, Page } from "puppeteer";
 import { err, info, warning } from "utils/chalk";
-import fs from "fs";
-
-/*
- * Typescript moment (colorized):
- */
-let window: any;
-let performance: any;
+import { waitUntil } from "evaluate/waitUntil";
+import { setTHREEOptions } from "evaluate/setTHREEOptions";
 
 export class Browser {
   private readonly networkTimeout: number = 6000; 
@@ -29,10 +24,10 @@ export class Browser {
    * 
    * @param options 
    */
-  constructor(options: {port: number, headless?: boolean, verbose?: boolean}) {
+  constructor(options: { port: number, headless?: boolean, verbose?: boolean }) {
     this.port = options.port;
-    if (options.headless) this.headless = options.headless;
-    if (options.verbose) this.verbose = options.verbose;
+    if (options.headless !== undefined) this.headless = options.headless;
+    if (options.verbose !== undefined) this.verbose = options.verbose;
   }
 
   /**
@@ -100,13 +95,15 @@ export class Browser {
    * @returns {@Browser}
    */
   public async loadPage(path: string, loop?: number): Promise<Browser> {
+    if (!loop) loop = 1;
+
     try {
       await this.page.goto(`http://localhost:${this.port}/${path}`, {
         waitUntil: 'networkidle2',
         timeout: this.networkTimeout * (loop ? loop : 1)
       })
     } catch (_err) { // timeout exceeded
-      if (this.verbose) console.log(`${warning} Network timeout exceeded for file (attempt: ${loop}) ${path}`);
+      if (this.verbose) console.log(`${warning}Network timeout exceeded for file (attempt: ${loop}) ${path}`);
       this.loadPage(path, loop++).catch(console.error);
     }
 
@@ -116,39 +113,32 @@ export class Browser {
   /**
    * 
    * @param loop 
+   */
+  private async evaluateWaitLoad(loop?: number) {
+    try {
+      if (this.verbose) console.log(`${info}${(loop ? loop : 1)} attempt(s)...`);
+      await this.page.evaluate(waitUntil, {
+        pageSize: this.pageSize,
+        pageSizeMinTax: this.pageSizeMinTax,
+        pageSizeMaxTax: this.pageSizeMaxTax,
+        networkTax: this.networkTax,
+        attempts: (loop ? loop : 1)
+      })
+    } catch {
+      if (loop < 10) this.evaluateWaitLoad(loop++);
+      else console.error(`${err}Too much attempts!`);
+    }
+  }
+
+  /**
+   * 
+   * @param loop 
    * @returns {Browser}
    */
-  public async evaluatePage(loop?: number): Promise<Browser> {
-    try {
-      await this.page.evaluate(async (pageSize: number, pageSizeMinTax: number, pageSizeMaxTax: number, networkTax: number, renderTimeout: number, attempts: number, verbose: boolean) => {
-        if (this.verbose) console.log(`${info}First attempt...`);
-        let resourcesSize = Math.min(1, (pageSize / 1024 / 1024 - pageSizeMinTax) / pageSizeMaxTax);
-        await new Promise((resolve) => setTimeout(resolve, networkTax * resourcesSize * attempts))
-
-        window.chromeRenderStarted = true;
-        await new Promise((resolve) => {
-          if (typeof performance.wow === "undefined") performance.wow === performance.now;
-
-          let renderStart = performance.wow();
-          let waitingLoop = setInterval(() => {
-            let renderExceeded = (performance.wow() - renderStart > renderTimeout * attempts);
-
-            if (window.chromeRenderFinished || renderExceeded) {
-              if (renderExceeded && verbose) console.log(`${warning}Render timeout exceeded...`);
-              clearInterval(waitingLoop);
-              resolve(null);
-            }
-          }, 0);
-
-        });
-
-      }, this.pageSize, this.pageSizeMinTax, this.pageSizeMaxTax, this.networkTax, this.renderTimeout, (loop ? loop : 1), this.verbose);
-
-    } catch (err) {
-      if (this.verbose) console.log(`${info}Another attempt...`);
-      await new Promise((resolve) => setTimeout(resolve, this.networkTimeout * loop++));
-    }
-
+  public async evaluatePage(options: any): Promise<Browser> {
+    await this.page.evaluate(setTHREEOptions, options);
+    await this.evaluateWaitLoad();
+  
     return this;
   }
 

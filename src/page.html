@@ -17,34 +17,44 @@
     <script type="module">
       import * as THREE from "https://cdn.skypack.dev/three@0.125.2/build/three.module.js";
 
-      const scene = new THREE.Scene();
-      scene.rotation.y = (135 * Math.PI) / 180;
-      scene.rotation.x = 0.625;
+      /** variables controlled by puppeteer */
+      window.animated = false;
+      window.background = 0x000000;
+      window.transparent = false;
+      window.size = 1000;
+      // ----
 
-      const camera = new THREE.PerspectiveCamera(50, 1, 1, 1000);
+      window.scene = new THREE.Scene();
+      window.scene.rotation.y = (135 * Math.PI) / 180;
+      window.scene.rotation.x = 0.625;
+
+      window.camera = new THREE.PerspectiveCamera(50, 1, 1, 1000);
       camera.position.set(0, 0, 2.5);
 
-      const renderer = new THREE.WebGLRenderer({
+      window.renderer = new THREE.WebGLRenderer({
+        alpha: true,
         antialias: false,
         preserveDrawingBuffer: true,
       });
-      renderer.setPixelRatio(2);
-      renderer.setSize(1000, 1000);
-      document.body.appendChild(renderer.domElement);
+
+      document.body.appendChild(window.renderer.domElement);
 
       const geometry = new THREE.BoxGeometry();
       const material = new THREE.MeshBasicMaterial({ color: 0x00ffff });
       const cube = new THREE.Mesh(geometry, material);
-      scene.add(cube);
+      window.scene.add(cube);
 
       function animate() {
-        renderer.render(scene, camera);
+        window.renderer.setPixelRatio(2);
+        window.renderer.setSize(window.size, window.size);
+        window.renderer.setClearColor(window.background, window.transparent ? 0 : 1);
 
-        const animated = window.location.search.replace("?animated=", "");
-        if (animated === "true") {
+        window.renderer.render(window.scene, window.camera);
+        requestAnimationFrame(animate);
+
+        if (window.animated === true) {
           cube.rotation.x += 0.01;
           cube.rotation.y += 0.01;
-          requestAnimationFrame(animate);
         }
       }
       animate();
