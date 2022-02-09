@@ -1,6 +1,6 @@
 {
   "name": "canvasmc",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "A new way to render Minecraft JSON models",
   "main": "index.ts",
   "scripts": {
@@ -24,6 +24,7 @@
   },
   "homepage": "https://github.com/Juknum/CanvasMC#readme",
   "dependencies": {
+    "chalk": "^4.1.2",
     "dotenv": "^16.0.0",
     "gifencoder": "^2.0.1",
     "puppeteer": "^13.2.0",
