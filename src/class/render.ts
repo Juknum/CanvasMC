@@ -2,18 +2,59 @@ require('dotenv').config();
 import http from "http";
 import handler from "serve-handler";
 import puppeteer from "puppeteer";
-import pixelmatch from "pixelmatch";
+import GIFEncoder from "gifencoder";
+import Canvas from "canvas";
 import fs from "fs";
 import path from "path";
-import {PNG as png, PNGWithMetadata} from "pngjs"
+import { error, info, success, warn } from "utils/chalk";
+
+export interface RenderOptions {
+  type: "png" | "gif",
+  gifOptions?: {
+    frames?: number,
+    delay?: number,
+    repeat?: boolean
+  }
+}
 
 export class Render {
-  public render() {
+  private readonly verbose: boolean = process.env.DEV === "true";
+  private doGIF: boolean = false;
+  private GIFframes: number = 60;
+  private GIFDelay: number = 5;
+  private GIFRepeat: boolean = true;
+  private readonly screenshotHeight = 1000;
+  private readonly screenshotWidth = this.screenshotHeight;
+
+  public render(options?: RenderOptions) {
+    if (options) {
+      this.doGIF = options.type === "gif";
+
+      if (options.gifOptions) {
+        if (options.gifOptions.frames) this.GIFframes = options.gifOptions.frames;
+        if (options.gifOptions.delay) this.GIFDelay = options.gifOptions.delay;
+        if (options.gifOptions.repeat) this.GIFRepeat = options.gifOptions.repeat;
+      }
+    }
+
+    else {
+      this.doGIF = false;
+    }
+
+    this.run();
+  }
+
+  private checkDir(path: fs.PathLike) {
+    if (!fs.existsSync(path)) {
+      fs.mkdirSync(path, { recursive: true });
+      return this.checkDir(path); // check another time
+    }
+  }
+
+  private run() {
     // original code: https://github.com/mrdoob/three.js/blob/19beb8ecc83b8f52de1e00dcfca59fc2ce55078f/test/e2e/puppeteer.js
 
     const port: number = 40;
-    const pixelThreshold: number = .2; // threshold error in one pixel
-    const maxFailedPixels: number = .05; // total failed pixels
 
     const networkTimeout: number = 600;
     const networkTax: number = 2000; // additional timeout for resources size
@@ -30,7 +71,7 @@ export class Render {
 
     /* Launch pupeteer with WebGL support in Linux */
     const pup = puppeteer.launch({
-      headless: !(process.env.VISIBLE === "true"),
+      headless: (process.env.HEADLESS === "true"),
       args: [
         "--use-gl=swiftshader",
         "--no-sandbox",
@@ -47,7 +88,7 @@ export class Render {
         try {
           await response.buffer().then((buffer: Buffer) => pageSize += buffer.length);
         } catch (e) {
-          console.warn(`Warning. Wrong request.\n${e}`);
+          if (this.verbose) console.warn(`${warn}Wrong request.\n${e}`);
         }
       });
 
@@ -77,11 +118,11 @@ export class Render {
           pageSize = 0;
 
           try {
-            await page.goto(`http://localhost:${port}/src/html/${file}.html`, {
+            await page.goto(`http://localhost:${port}/src/html/${file}?animated=${this.doGIF}`, {
               waitUntil: 'networkidle2',
               timeout: networkTimeout * attemptProgress
             });
-          } catch { console.warn('Warning. Network timeout exceeded...'); }
+          } catch { if (this.verbose) console.log(`${warn}Network timeout exceeded...`); }
 
           /* render page */
           try {
@@ -113,85 +154,74 @@ export class Render {
             }, pageSize, pageSizeMinTax, pageSizeMaxTax, networkTax, renderTimeout, attemptProgress);
           } catch (e) {
             if (++attemptId === maxAttemptId) {
-              console.log(`Small network timeout. file: ${file}\n${e}`);
+              if (this.verbose) console.log(`${warn}Small network timeout. file: ${file}\n${e}`);
               failedScreenshots.push(file);
               continue;
             }
 
             else {
-              console.log('Another attempt...');
+              if (this.verbose) console.log(`${info}Another attempt...`);
               await new Promise((resolve) => setTimeout(resolve, networkTimeout * attemptProgress));
             }
           }
 
-          /* Make or diff? */
-          if (process.env.MAKE) {
-            /* make screenshots */
-            attemptId = maxAttemptId;
-            await page.screenshot({ path: path.join(__dirname, `../html/screenshots/${file}.png`), clip: {
-              x: 0,
-              y: 0,
-              width: 1000,
-              height: 1000
-            } });
-            console.log(`File: ${file} generated.`);
-          }
+          /* make screenshots */
+          attemptId = maxAttemptId;
 
-          else if (fs.existsSync(path.join(__dirname, `../html/screenshots/${file}.png`))) {
-            /* Diff screenshots */
+          const screenshotDir: fs.PathLike = path.join(__dirname, "../../screenshots/");
+          const outputDir: fs.PathLike = path.join(__dirname, "../../output/");
+          this.checkDir(screenshotDir);
+          this.checkDir(outputDir);
 
-            let actual: PNGWithMetadata = png.sync.read((await page.screenshot()) as Buffer);
-            let expected: PNGWithMetadata = png.sync.read(fs.readFileSync(path.join(__dirname, `./html/screenshots/${file}.png`)));
-            let diff = new png({ width: actual.width, height: actual.height });
+          if (this.doGIF) {
+            const GIFEncoder_ = new GIFEncoder(this.screenshotWidth, this.screenshotHeight);
+		        GIFEncoder_.start()
+            GIFEncoder_.setRepeat(this.GIFRepeat === true ? 0 : -1);   // 0 for repeat, -1 for no-repeat
+            GIFEncoder_.setDelay(this.GIFDelay);  // frame delay in ms
 
-            let numFailedPixels: number;
-            try {
-              numFailedPixels = pixelmatch(expected.data, actual.data, diff.data, actual.width, actual.height, {
-                threshold: pixelThreshold,
-                alpha: .2,
-                diffMask: process.env.FORCE_COLOR === '0',
-                diffColor: process.env.FORCE_COLOR === '0' ? [ 255,255,255 ] : [255,0,0]
+            const canvas = Canvas.createCanvas(this.screenshotWidth, this.screenshotHeight);
+            const context = canvas.getContext('2d');
+
+            for (let i = 0; i < this.GIFframes; i++) {
+              context.clearRect(0, 0, canvas.width, canvas.height);
+
+
+              const screenshotPath: fs.PathLike = path.join(screenshotDir, `${file}_${i}.png`);
+              await page.screenshot({ 
+                path: screenshotPath, 
+                clip: { x: 0, y: 0, width: this.screenshotWidth, height: this.screenshotHeight } 
               });
-            } catch {
-              attemptId = maxAttemptId;
-              console.warn(`Error! Image sizes does not match in file: ${file}`);
-              failedScreenshots.push(file);
-              continue;
+              if (this.verbose) console.log(`${info}File generated: ${screenshotPath}`);
+
+              const screenshot = await Canvas.loadImage(screenshotPath);
+              context.drawImage(
+                screenshot,				    			// image
+                0, canvas.height,           // sx, sy
+                canvas.width, canvas.width,	// sWidth, sHeight
+                0, 0,												// dx, dy
+                canvas.width, canvas.height	// dWidth, dHeight
+              )
+
+              GIFEncoder_.addFrame(context as CanvasRenderingContext2D);
             }
 
-            numFailedPixels /= actual.width * actual.height;
-
-            /* Print results */
-            if (numFailedPixels < maxFailedPixels) {
-              attemptId = maxAttemptId;
-              console.log(`diff: ${numFailedPixels.toFixed(3)}, file: ${file}`);
-            }
-            else {
-              if (++attemptId === maxAttemptId) {
-                console.error(`Error! diff wrong in ${numFailedPixels.toFixed(3)} of pixels in file: ${file}`);
-                failedScreenshots.push(file);
-                continue;
-              }
-              else console.log('Another attempt...');
-            }
+            GIFEncoder_.finish();
+            const gifPath: fs.PathLike = path.join(outputDir, `${file}.gif`);
+            fs.writeFileSync(gifPath, GIFEncoder_.out.getData())
+            fs.rmdirSync(screenshotDir, { recursive: true });
+            if (this.verbose) console.log(`${success}File generated: ${gifPath}`);
           }
-          
+
           else {
-            attemptId = maxAttemptId;
-            console.log(`Warning! Screenshot not exists: ${file}`);
-            continue;
+            const outputPath: fs.PathLike = path.join(outputDir, `${file}.png`)
+            await page.screenshot({ 
+              path: outputPath, 
+              clip: { x: 0, y: 0, width: this.screenshotWidth, height: this.screenshotHeight } 
+            });
+
+            if (this.verbose) console.log(`${success}File generated: ${outputPath}`);
           }
         } 
-      }
-
-      /* Finish */
-      if (failedScreenshots.length) {
-        if (failedScreenshots.length > 1) console.log('List of failed screenshots: ' + failedScreenshots.join(' '));
-        else console.log(`If you sure that all is right, try to run \`npm run make-screenshot ${failedScreenshots[0]}\``);
-        console.log(`TEST FAILED! ${failedScreenshots.length} from ${endId - beginId} screenshots not pass.`);
-      }
-      else if (!process.env.MAKE) {
-        console.log(`TEST PASSED! ${endId - beginId} screenshots correctly rendered.`);
       }
 
       browser.close();

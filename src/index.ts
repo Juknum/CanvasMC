@@ -1,4 +1,4 @@
 import { Render } from "class/render";
 
 const r = new Render();
-r.render();
+r.render({ type: "png" });
