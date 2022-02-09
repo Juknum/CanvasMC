@@ -38,14 +38,13 @@
       scene.add(cube);
 
       function animate() {
-        requestAnimationFrame(animate);
         renderer.render(scene, camera);
 
         const animated = window.location.search.replace("?animated=", "");
-        console.log(animated);
         if (animated === "true") {
           cube.rotation.x += 0.01;
           cube.rotation.y += 0.01;
+          requestAnimationFrame(animate);
         }
       }
       animate();
